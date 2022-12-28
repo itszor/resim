@@ -5,9 +5,10 @@
 #include "Memory.hpp"
 
 #include <iostream>
-#include <QCoreApplication>
-#include <QFile>
-#include <cassert>
+#include <iterator>
+#include <fstream>
+#include <vector>
+#include <string>
 
 static Device *getDevice(const char *name, bool verbose) {
 	auto devices = Device::getDeviceTypes();
@@ -23,7 +24,7 @@ static Device *getDevice(const char *name, bool verbose) {
 	return NULL;
 }
 
-static bool createSimulator(Processor **processor, QList<Device*> *devices,
+static bool createSimulator(Processor **processor, std::vector<Device*>& devices,
 			    bool verbose) {
 	// Create the processor
 	auto processors = Processor::getProcessorTypes();
@@ -45,12 +46,29 @@ static bool createSimulator(Processor **processor, QList<Device*> *devices,
 		std::cerr << "DRAM device not available!" << std::endl;
 		return false;
 	}
-	devices->append(dram);
+	devices.push_back(dram);
 	return true;
 }
 
+static uintptr_t parse_uintptr(const char* str,bool& ok) {
+	ok = false;
+	if (!str) return 0;
+	while (isspace(*str)) ++str;
+	if (str[0]=='0' && str[1]=='x') {
+		ok = true;
+		return strtoll(str+2,nullptr,16);
+	}
+	ok = true;
+	return strtoll(str,nullptr,10);
+}
+
+static std::vector<unsigned char> read_all(std::ifstream& is) {
+	std::vector<unsigned char> buffer(std::istreambuf_iterator<char>(is), {});
+	return buffer;
+}
+
 int main(int argc, char **argv) {
-	QCoreApplication app(argc, argv);
+	
 	int i = 1, first_pos_arg = 1, remaining_args;
 	bool logging = false;
 	bool verbose = false;
@@ -82,44 +100,42 @@ int main(int argc, char **argv) {
 				<< std::endl;
 		return -1;
 	}
-	QString imageFileName = argv[first_pos_arg];
-	QString bootromFileName = "";
+	std::string imageFileName = argv[first_pos_arg];
+	std::string bootromFileName = "";
 	if (remaining_args == 4) {
 		bootromFileName = argv[first_pos_arg + 3];
 	}
 	bool ok;
-	uintptr_t imageAddress
-	  = QString(argv[first_pos_arg + 1]).toULong(&ok, 0);
+	uintptr_t imageAddress = parse_uintptr(argv[first_pos_arg + 1],ok);
 	if (!ok) {
 		std::cerr << "Could not parse the image base address." << std::endl;
 		return -1;
 	}
-	uintptr_t entryAddress
-	  = QString(argv[first_pos_arg + 2]).toULong(&ok, 0);
+	uintptr_t entryAddress = parse_uintptr(argv[first_pos_arg + 2],ok);
 	if (!ok) {
 		std::cerr << "Could not parse the program entry address." << std::endl;
 		return -1;
 	}
 	// Read the image file
-	QFile imageFile(imageFileName);
-	if (!imageFile.open(QFile::ReadOnly)) {
+	std::ifstream imageFile(imageFileName.c_str(),std::ios::binary);
+	if (!imageFile) {
 		std::cerr << "Could not read the memory image." << std::endl;
 		return -1;
 	}
-	QByteArray image = imageFile.readAll();
-	QByteArray bootrom;
+	auto image = read_all(imageFile);
+	std::vector<unsigned char> bootrom;
 	if (bootromFileName != "") {
-		QFile bootromFile(bootromFileName);
-		if (!bootromFile.open(QFile::ReadOnly)) {
+		std::ifstream bootromFile(bootromFileName.c_str(),std::ios::binary);
+		if (!bootromFile) {
 			std::cerr << "Could not read the bootrom image." << std::endl;
 			return -1;
 		}
-		bootrom = bootromFile.readAll();
+		bootrom = read_all(bootromFile);
 	}
 	// Create the simulator
 	Processor *processor;
-	QList<Device*> devices;
-	if (!createSimulator(&processor, &devices, verbose)) {
+	std::vector<Device*> devices;
+	if (!createSimulator(&processor, devices, verbose)) {
 		return -1;
 	}
 	/*// Create a log file
@@ -135,17 +151,17 @@ int main(int argc, char **argv) {
 		log.tofile("vc4emul.log");
 	log.info("", "Initializing the simulator...");
 	processor->initialize(&log, &memory);
-	foreach (auto device, devices) {
+	for (auto device : devices) {
 		device->initialize(&log, &memory);
 	}
 	processor->setRegister("pc", entryAddress);
 	log.info("", "Loading the memory image...");
-	for (int offset = 0; offset < image.length(); offset++) {
+	for (size_t offset = 0; offset < image.size(); offset++) {
 		memory.writeByte(imageAddress + offset, image.at(offset));
 	}
 	if (bootromFileName != "") {
 		log.info("", "Loading the bootrom image...");
-		for (int offset = 0; offset < bootrom.length(); offset++) {
+		for (size_t offset = 0; offset < bootrom.size(); offset++) {
 			memory.writeByte(0x60000000 + offset, bootrom.at(offset));
 		}
 	}
